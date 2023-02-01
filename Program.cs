@@ -17,6 +17,16 @@ internal class Program
     Database.CreateLogTableIfNotExists(connection);
     var indexesToScrape = Database.DetermineIndexesToFetchDataFrom(indexes, connection);
     Console.WriteLine(string.Join(", ", indexesToScrape));
+
+    await Parallel.ForEachAsync(indexesToScrape, async (index, _ct) =>
+    {
+      Console.WriteLine($"Scraping index {index}....");
+      await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index))
+      {
+        Console.WriteLine($"got results for index {index}: {page.From} to {page.From + page.Documents.Count}, total = {page.Total}");
+      }
+    });
+
   }
 
   public static IConfigurationRoot CreateConfig()
