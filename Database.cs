@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
@@ -36,7 +37,23 @@ public class Database
       {
         foreach (var prop in parameters.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
-          cmd.Parameters.AddWithValue($"@{prop.Name}", prop.GetValue(parameters, null));
+          var paramValue = prop.GetValue(parameters, null);
+          // this should allow us to write parameterized WHERE x in (...) queries
+          if (paramValue != null && paramValue.GetType() != typeof(string) && typeof(IEnumerable).IsAssignableFrom(paramValue.GetType()))
+          {
+            var values = (IEnumerable)paramValue;
+            int i = 0;
+            foreach (var val in values)
+            {
+              cmd.Parameters.AddWithValue($"@{prop.Name}{i++}", val);
+            }
+            string replacementParamText = string.Join(",", Enumerable.Range(0, i).Select(i => $"@{prop.Name}{i}"));
+            cmd.CommandText = cmd.CommandText.Replace($"@{prop.Name}", replacementParamText);
+          }
+          else
+          {
+            cmd.Parameters.AddWithValue($"@{prop.Name}", paramValue);
+          }
         }
       }
       using (var reader = cmd.ExecuteReader())
