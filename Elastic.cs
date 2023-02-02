@@ -18,32 +18,47 @@ public class Elastic
     };
   }
 
-  public static async Task<IEnumerable<string>> ListIndexes(HttpClient client)
+  public static async Task<IEnumerable<string>> ListIndexesOrdered(HttpClient client)
   {
     // according to the docs https://www.elastic.co/guide/en/elasticsearch/reference/current/cat-indices.html
     // _cat/indices is intended for human consumption so we need to use the index api
-    var json = await client.GetStringAsync("/*?expand_wildcards=open");
+    var json = await client.GetStringAsync("/junoslogs*?expand_wildcards=open");
     return JObject.Parse(json)
     .Cast<KeyValuePair<string, JToken>>()
     .Select(x => x.Key)
+    .Order()
     .ToList();
   }
 
-  public static async IAsyncEnumerable<Page> EnumerateAllDocumentsInIndex(HttpClient client, string indexName)
+  public static object GenerateJunosQuery(params object[] matches)
+  {
+    var orQueries = matches
+    .Select(JObject.FromObject)
+    .Select(AndFields)
+    .ToList();
+
+    return new
+    {
+      query = new { @bool = new { should = orQueries } }
+    };
+  }
+
+  private static object AndFields(JObject fields)
+  {
+    var matches = fields
+    .Cast<KeyValuePair<string, JToken>>()
+    .Select(field => new { match = new Dictionary<string, object> { { field.Key, field.Value } } })
+    .ToList();
+    return new { @bool = new { must = matches } };
+  }
+
+  public static async IAsyncEnumerable<Page> EnumerateAllDocumentsInIndex(HttpClient client, string indexName, object query)
   {
     int from = 0, size = 1000;
     while (true)
     {
-      var query = JsonConvert.SerializeObject(new
-      {
-        from = from,
-        size = size,
-        query = new
-        {
-          match_all = new { }
-        }
-      });
-      var request = new StringContent(query.ToString(), Encoding.UTF8, "application/json");
+      var queryStr = JsonConvert.SerializeObject(query, Formatting.None);
+      var request = new StringContent(queryStr, Encoding.UTF8, "application/json");
       var response = await client.PostAsync($"/{indexName}/_search", request);
       var responseBody = await response.Content.ReadAsStringAsync();
       var json = JObject.Parse(responseBody);
