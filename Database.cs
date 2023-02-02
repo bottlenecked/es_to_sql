@@ -23,12 +23,6 @@ public class Database
                       )");
   }
 
-  public static IEnumerable<string> DetermineIndexesToFetchDataFrom(IEnumerable<string> allIndexes, SqlConnection conn)
-  {
-    var last_index = ExecuteSql(conn, "select top(1) * from log_entries order by inserted_at desc").Select(r => (string)r["index_name"]).FirstOrDefault();
-    return allIndexes.Order().SkipWhile(index => string.Compare(index, last_index) < 1);
-  }
-
   public static IEnumerable<Dictionary<string, object>> ExecuteSql(SqlConnection conn, string cmdText, object? parameters = null)
   {
     using (var cmd = new SqlCommand(cmdText, conn))

@@ -49,17 +49,20 @@ internal class Program
 
     // Filter out all the indexes that are greater than the last index calculated above
     // because writing may not have finished there
-    var indexesToScan = indexes.TakeWhile(idx => string.Compare(idx, lastIndex) < 1);
-    Console.WriteLine($"Indexes to scan = {string.Join(",", indexesToScan)}, count={indexesToScan.Count()}");
+    var candidateIndexes = indexes.TakeWhile(idx => string.Compare(idx, lastIndex) < 1).ToHashSet();
+    Console.WriteLine($"Indexes to scan = {string.Join(",", candidateIndexes)}, count={candidateIndexes.Count()}");
 
     // Now scan the database for the indexes completed. For every match we're going to skip that index
     // because it would have been scanned in a previous run
 
-    var previouslyCompletedIndexes = Database.ExecuteSql(connection, "SELECT index_name FROM log_entries WHERE index_name IN (@indexes)", new { indexes = indexesToScan })
-    .SelectMany(x => x.Values)
-    .Cast<string>()
-    .ToList();
+    var previouslyCompletedIndexes = Database.ExecuteSql(connection, "SELECT index_name FROM log_entries WHERE index_name IN (@indexes)", new { indexes = candidateIndexes })
+      .SelectMany(x => x.Values)
+      .Cast<string>()
+      .ToList();
     Console.WriteLine("Indexes completed=" + string.Join(", ", previouslyCompletedIndexes));
+
+    // Skip the indexes that have already been completed
+    var indexesToScan = candidateIndexes.Except(previouslyCompletedIndexes).ToList();
 
     // Calculate the last index to scan
     // var indexesToScrape = Database.DetermineIndexesToFetchDataFrom(indexes, connection);
