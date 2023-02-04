@@ -1,4 +1,7 @@
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
+using System.Dynamic;
+using System.Text;
+using Newtonsoft.Json.Linq;
 
 internal class Program
 {
@@ -37,7 +40,6 @@ internal class Program
       }
     }
 
-    Database.CreateLogTableIfNotExists(connection);
 
     // Get all the indexes available in ElasticSearch
     var indexes = await Elastic.ListIndexesOrdered(elasticClient);
@@ -57,7 +59,7 @@ internal class Program
     // Now scan the database for the indexes completed. For every match we're going to skip that index
     // because it would have been scanned in a previous run
 
-    var previouslyCompletedIndexes = Database.ExecuteSql(connection, "SELECT index_name FROM log_entries WHERE index_name IN (@indexes)", new { indexes = candidateIndexes })
+    var previouslyCompletedIndexes = (await Database.ExecuteSql(connection, "SELECT index_name FROM log_entries WHERE index_name IN (@indexes)", new { indexes = candidateIndexes }))
       .SelectMany(x => x.Values)
       .Cast<string>()
       .ToList();
@@ -66,24 +68,72 @@ internal class Program
     // Skip the indexes that have already been completed
     var indexesToScan = candidateIndexes.Except(previouslyCompletedIndexes).ToList();
 
-    // Calculate the last index to scan
-    // var indexesToScrape = Database.DetermineIndexesToFetchDataFrom(indexes, connection);
-    // Console.WriteLine(string.Join(", ", indexesToScrape));
-
-    //var q = Elastic.GenerateJunosQuery(matches);
-    //Console.WriteLine(JsonConvert.SerializeObject(q));
-
-    // await Parallel.ForEachAsync(indexesToScrape, async (index, _ct) =>
-    // {
-    //   Console.WriteLine($"Scraping index {index}....");
-    //   await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index))
-    //   {
-    //     Console.WriteLine($"got results for index {index}: {page.From} to {page.From + page.Documents.Count}, total = {page.Total}");
-    //   }
-    // });
+    // Time to fetch the documents from Elastic
+    var q = Elastic.GenerateJunosQuery(matches);
+    await Parallel.ForEachAsync(indexesToScan, async (index, _ct) =>
+    {
+      Console.WriteLine($"Scraping index {index}....");
+      await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, q))
+      {
+        (var cmd, var cmdparams) = BuildCommand(page);
+        await Database.ExecuteSql(connection, cmd, cmdparams);
+      }
+      // Let's log that we're done with that particular index
+      await Database.ExecuteSql(connection, "INSERT INTO log_entries (index_name, inserted_at) VALUES (@index_name, @inserted_at)", new { index_name = index, inserted_at = DateTime.UtcNow });
+    });
 
   }
 
+  private static (string, object) BuildCommand(Elastic.Page page)
+  {
+    (var builder, var cmdparams) =
+    page.Documents
+   .Select((doc, i) =>
+   {
+     var _source = doc["_source"] as JObject;
+     var cmdparams = new Dictionary<string, object>{
+      {$"document_id{i}", doc["_id"].Raw()},
+      { $"index_name{i}", page.IndexName},
+      { $"event_category{i}", _source["event_category"].Raw()},
+      { $"event_timestamp{i}", _source["event_timestamp"].Raw()},
+      { $"event_type{i}", _source["event_type"].Raw()},
+      { $"host{i}", _source["host"].Raw()},
+      { $"syslog_hostname{i}", _source["syslog_hostname"].Raw()},
+      { $"source_zone{i}", _source["source_zone"].Raw()},
+      { $"application{i}", _source["application"].Raw()},
+      { $"reason{i}", _source["reason"].Raw()},
+      { $"category{i}", _source["category"].Raw()},
+      { $"url{i}", _source["url"].Raw()},
+      // WARN: the ES field attack-name is spelled with a dash -
+      { $"attack_name{i}", _source["attack-name"].Raw()},
+      { $"threat_severity{i}", _source["threat_severity"].Raw()},
+      { $"inserted_at{i}", DateTime.UtcNow},
+     };
+
+     // Make sure to only insert rows that don't exist. Entries in Elastic are assumed
+     // immutable. Reference statement from https://michaeljswart.com/2017/07/sql-server-upsert-patterns-and-antipatterns/
+     var query = @$"
+      INSERT documents (document_id, index_name, event_category, event_timestamp, event_type,
+                        host, syslog_hostname, source_zone, application, reason, category, url,
+                        attack_name, threat_severity, inserted_at)
+      SELECT @document_id{i}, @index_name{i}, @event_category{i}, @event_timestamp{i}, @event_type{i}, 
+              @host{i}, @syslog_hostname{i}, @source_zone{i}, @application{i}, @reason{i}, @category{i}, @url{i},
+              @attack_name{i}, @threat_severity{i}, @inserted_at{i}
+      WHERE NOT EXISTS (
+        SELECT *
+          FROM documents WITH (UPDLOCK, SERIALIZABLE)
+          WHERE document_id=@document_id{i} AND index_name=@index_name{1}
+      )
+     ";
+
+     return (query, cmdparams);
+   })
+   .Aggregate((new StringBuilder(), new ExpandoObject() as IDictionary<string, object>), (acc, cmdopts) =>
+     (acc.Item1.Append(cmdopts.Item1), acc.Item2.Merge(cmdopts.Item2))
+   );
+
+    return (builder.ToString(), cmdparams);
+  }
 
   public static IConfigurationRoot CreateConfig()
   {
@@ -93,14 +143,4 @@ internal class Program
         .AddEnvironmentVariables()
         .Build();
   }
-
-
-
-
-
-
-
-
-
-
 }
