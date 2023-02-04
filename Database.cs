@@ -12,48 +12,74 @@ public class Database
     return connection;
   }
 
-  public static void CreateLogTableIfNotExists(SqlConnection conn)
+  public static Task CreateLogTableIfNotExists(SqlConnection conn)
   {
     var table_name = "log_entries";
 
-    ExecuteSql(conn, @$"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='{table_name}' and xtype='U')
-                      CREATE TABLE {table_name} (
-                          index_name varchar(255) not null,
-                          inserted_at datetime not null
-                      )");
+    return ExecuteSql(conn, @$"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='{table_name}' and xtype='U')
+                      BEGIN
+                        CREATE TABLE {table_name} (
+                            id bigint NOT NULL IDENTITY(1,1) PRIMARY KEY,
+                            index_name varchar(255) not null,
+                            inserted_at datetime not null
+                        );
+                        CREATE UNIQUE INDEX uidx_index_name ON {table_name} (index_name);
+                      END");
+  }
+  public static Task CreateDocumentsTableIfNotExists(SqlConnection conn)
+  {
+    var table_name = "documents";
+
+    return ExecuteSql(conn, @$"IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='{table_name}' and xtype='U')
+                        BEGIN
+                          CREATE TABLE {table_name} (
+                              id bigint NOT NULL IDENTITY(1,1) PRIMARY KEY,
+                              document_id varchar(255) NOT NULL,
+                              index_name varchar(255) not null,
+                              event_category varchar(255),
+                              event_timestamp datetime not null,
+                              event_type varchar(255),
+                              host varchar(255),
+                              syslog_hostname varchar(255),
+                              source_zone varchar(255),
+                              application varchar(255),
+                              reason varchar(512),
+                              category varchar(255),
+                              url varchar(512),
+                              attack_name varchar(255),
+                              threat_severity varchar(32),
+                              inserted_at datetime not null
+                          );
+                          CREATE UNIQUE INDEX uidx_document_id_index_name ON {table_name} (document_id, index_name);
+                      END");
   }
 
-  public static IEnumerable<Dictionary<string, object>> ExecuteSql(SqlConnection conn, string cmdText, object? parameters = null)
+  public static async Task<IEnumerable<Dictionary<string, object>>> ExecuteSql(SqlConnection conn, string cmdText, object? parameters = null)
   {
     using (var cmd = new SqlCommand(cmdText, conn))
     {
-      if (parameters != null)
+      foreach (var prop in UnrollParams(parameters))
       {
-        foreach (var prop in parameters.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        // this should allow us to write parameterized WHERE x in (...) queries
+        if (prop.Value.GetType() != typeof(string) && prop.Value is IEnumerable list)
         {
-          var paramValue = prop.GetValue(parameters, null);
-          // this should allow us to write parameterized WHERE x in (...) queries
-          if (paramValue != null && paramValue.GetType() != typeof(string) && typeof(IEnumerable).IsAssignableFrom(paramValue.GetType()))
+          int i = 0;
+          foreach (var val in list)
           {
-            var values = (IEnumerable)paramValue;
-            int i = 0;
-            foreach (var val in values)
-            {
-              cmd.Parameters.AddWithValue($"@{prop.Name}{i++}", val);
-            }
-            string replacementParamText = string.Join(",", Enumerable.Range(0, i).Select(i => $"@{prop.Name}{i}"));
-            cmd.CommandText = cmd.CommandText.Replace($"@{prop.Name}", replacementParamText);
+            cmd.Parameters.AddWithValue($"@{prop.Key}{i++}", val);
           }
-          else
-          {
-            cmd.Parameters.AddWithValue($"@{prop.Name}", paramValue);
-          }
+          string replacementParamText = string.Join(",", Enumerable.Range(0, i).Select(i => $"@{prop.Key}{i}"));
+          cmd.CommandText = cmd.CommandText.Replace($"@{prop.Key}", replacementParamText);
+        }
+        else
+        {
+          cmd.Parameters.AddWithValue($"@{prop.Key}", prop.Value);
         }
       }
-      using (var reader = cmd.ExecuteReader())
+      using (var reader = await cmd.ExecuteReaderAsync())
       {
         var list = new List<Dictionary<string, object>>();
-        while (reader.Read())
+        while (await reader.ReadAsync())
         {
           var values = new object[reader.FieldCount];
           reader.GetValues(values);
@@ -66,6 +92,28 @@ public class Database
           }
         }
         return list;
+      }
+    }
+  }
+
+  private static IEnumerable<KeyValuePair<string, object>> UnrollParams(object? cmdparams)
+  {
+    if (cmdparams == null)
+    {
+      yield break;
+    }
+    else if (cmdparams is IDictionary<string, object> dict)
+    {
+      foreach (var kvp in dict)
+      {
+        yield return KeyValuePair.Create<string, object>(kvp.Key, kvp.Value ?? DBNull.Value);
+      }
+    }
+    else
+    {
+      foreach (var prop in cmdparams.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
+      {
+        yield return KeyValuePair.Create<string, object>(prop.Name, prop.GetValue(cmdparams, null) ?? DBNull.Value);
       }
     }
   }
