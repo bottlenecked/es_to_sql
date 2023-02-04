@@ -19,7 +19,7 @@ curl http://elastic:changeme@localhost:9200/_cat/indices
 
 You can also see the number of documents in an index by e.g. running (see hits.total)
 ```bash
-curl "http://elastic:changeme@localhost:9200/junoslogs-2023.01.01-05/_search" -d '{"query": {"match_all":{}}}'
+curl "http://elastic:changeme@localhost:9200/junoslogs-2023.01.01-05/_search" -d '{"size": 1, "query": {"match_all":{}}}'
 ```
 
 ## Local run
@@ -28,3 +28,8 @@ After completing the setup, you can test the program locally with
 dotnet run --testrun
 ```
 This will do all the work (scan indexes and populate the database) so it's not exactly idempotent
+
+To connect to the dockerized ms sql server use
+```bash
+mssql-cli -S localhost -d tempdb -U sa -P P@ssword -C
+```
