@@ -1,16 +1,16 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 
 internal class Program
 {
   static IConfigurationRoot config = CreateConfig();
 
   static object[] matches = new object[]{
-    new {event_category="antivirus", source_zone="business-Wired"},
-    new {event_category = "apptrack", application="BITTORRENT", event_type="APPTRACK_SESSION_CLOSE", reason="Closed by junos-dynapp"},
-    new {event_category="webfilter", category="Enhanced_Personals_and_Dating", event_type="WEBIFLTER_URL_BLOCKED", source_zone="crew-Wired", url="edge.microsoft.com"},
-    new {event_category="webfilter", category="TELEGRAM", event_type="WEBIFLTER_URL_PERMITTED", source_zone="crew-Wired", url="tools.dvdvideosoft.com/stat.jso"},
-    new {event_category="firewall", reason="Closed by junos-dynapp", event_type="RT_FLOW_SESSION_CLOSE", source_zone="crew-Wired"},
-    new {event_category="ips", event_type="IDP_ATTACK_LOG_EVENT", source_zone="crew-Wired", threat_severity="HIGH"},
+    new {event_category = "antivirus", source_zone = "business-Wired"},
+    new {event_category = "apptrack", application = "BITTORRENT", event_type = "APPTRACK_SESSION_CLOSE", reason = "Closed by junos-dynapp"},
+    new {event_category = "webfilter", category = "Enhanced_Personals_and_Dating", event_type = "WEBIFLTER_URL_BLOCKED", source_zone = "crew-Wired", url = "edge.microsoft.com"},
+    new {event_category = "webfilter", category = "TELEGRAM", event_type = "WEBIFLTER_URL_PERMITTED", source_zone = "crew-Wired", url = "tools.dvdvideosoft.com/stat.jso"},
+    new {event_category = "firewall", reason = "Closed by junos-dynapp", event_type = "RT_FLOW_SESSION_CLOSE", source_zone = "crew-Wired"},
+    new {event_category = "ips", event_type = "IDP_ATTACK_LOG_EVENT", source_zone = "crew-Wired", threat_severity = "HIGH"},
   };
 
   static DateTime now = DateTime.UtcNow;
@@ -29,6 +29,8 @@ internal class Program
           await DocumentGenerator.PopulateIndexes(elasticClient, dummyIndexes);
           return;
         case "--testrun":
+          await Database.CreateLogTableIfNotExists(connection);
+          await Database.CreateDocumentsTableIfNotExists(connection);
           // use a fixed timestamp to make sure we'll scan among the existing local indexes
           now = DateTime.Parse("2023-01-02T09:00:00Z").ToUniversalTime();
           break;
