@@ -29,7 +29,6 @@ public class Elastic
     .Order()
     .ToList();
   }
-
   public static object GenerateJunosQuery(params object[] matches)
   {
     var orQueries = matches
@@ -37,10 +36,7 @@ public class Elastic
     .Select(AndFields)
     .ToList();
 
-    return new
-    {
-      query = new { @bool = new { should = orQueries } }
-    };
+    return new { @bool = new { should = orQueries } };
   }
 
   private static object AndFields(JObject fields)
@@ -57,7 +53,8 @@ public class Elastic
     int from = 0, size = 1000;
     while (true)
     {
-      var queryStr = JsonConvert.SerializeObject(query, Formatting.None);
+      var paged_query = new { query = query, from = from, size = size };
+      var queryStr = JsonConvert.SerializeObject(paged_query, Formatting.None);
       var request = new StringContent(queryStr, Encoding.UTF8, "application/json");
       var response = await client.PostAsync($"/{indexName}/_search", request);
       var responseBody = await response.Content.ReadAsStringAsync();
