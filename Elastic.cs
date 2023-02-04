@@ -65,6 +65,7 @@ public class Elastic
       var docs = ((JArray)json["hits"]["hits"]).Cast<JObject>().ToList();
       var page = new Page
       {
+        IndexName = indexName,
         From = from,
         Total = (int)json["hits"]["total"],
         Documents = docs
@@ -80,6 +81,7 @@ public class Elastic
 
   public class Page
   {
+    public string IndexName { get; set; }
     public int From { get; set; }
     public int Total { get; set; }
     public IList<JObject> Documents { get; set; }
