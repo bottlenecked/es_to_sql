@@ -9,5 +9,5 @@ class Log4NetSetup
     log4net.GlobalContext.Properties["ellapsed"] = new Log4NetSetup();
   }
 
-  public override string ToString() => $"+{(DateTime.UtcNow - start).TotalSeconds.ToString("F1")}";
+  public override string ToString() => $"+{Math.Abs((DateTime.UtcNow - start).TotalSeconds).ToString("F1")}";
 }

@@ -5,7 +5,7 @@
         </layout>
     </appender>
     <appender name="RollingLogFileAppender" type="log4net.Appender.RollingFileAppender">
-        <file value="logs/rtglogfile.txt" />
+        <file value="logs/logfile.txt" />
         <appendToFile value="true" />
         <rollingStyle value="Composite" />
         <datePattern value="yyyyMMdd" />

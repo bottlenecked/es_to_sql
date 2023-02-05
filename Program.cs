@@ -24,8 +24,19 @@ internal class Program
     new {event_category = "ips", event_type = "IDP_ATTACK_LOG_EVENT", source_zone = "crew-Wired", threat_severity = "HIGH"},
   };
 
-
   private static async Task Main(string[] args)
+  {
+    try
+    {
+      await Execute(args);
+    }
+    catch (Exception ex)
+    {
+      log.Error("Program failed.", ex);
+    }
+  }
+
+  private static async Task Execute(string[] args)
   {
     var start = now;
     log.Info($"-------------------------------- Start program at {start} --------------------------------");
@@ -87,31 +98,37 @@ internal class Program
     var q = Elastic.GenerateJunosQuery(matches);
     await Parallel.ForEachAsync(indexesToScan, async (index, _ct) =>
     {
-      var documentsScrapedFromIndex = 0;
-      log.Info($"Beging scraping index {index}....");
-      await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, q))
+      try
       {
-        log.Info($"Fetched document batch {page.Name}");
-        // Now write the entire page of documents (1000) in one go to avoid
-        // being too chatty
-        log.Info($"Begin inserting document batch {page.Name}...");
-        (var cmd, var cmdparams) = BuildCommand(page);
-        await Database.ExecuteSql(connection, cmd, cmdparams);
-        log.Info($"Finished inserting document batch {page.Name}...");
-        Interlocked.Add(ref documentsScrapedTotal, page.Documents.Count);
-        Interlocked.Add(ref documentsScrapedFromIndex, page.Documents.Count);
-      }
-      log.Info($"Finished scraping index {index} from Elastic. Documents scraped={documentsScrapedFromIndex}");
+        var documentsScrapedFromIndex = 0;
+        log.Info($"Beging scraping index {index}....");
+        await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, q))
+        {
+          log.Info($"Fetched document batch {page.Name}");
+          // Now write the entire page of documents (1000) in one go to avoid
+          // being too chatty
+          log.Info($"Begin inserting document batch {page.Name}...");
+          (var cmd, var cmdparams) = BuildCommand(page);
+          await Database.ExecuteSql(connection, cmd, cmdparams);
+          log.Info($"Finished inserting document batch {page.Name}...");
+          Interlocked.Add(ref documentsScrapedTotal, page.Documents.Count);
+          Interlocked.Add(ref documentsScrapedFromIndex, page.Documents.Count);
+        }
+        log.Info($"Finished scraping index {index} from Elastic. Documents scraped={documentsScrapedFromIndex}");
 
-      // Let's log that we're done with that particular index
-      log.Info($"Begin flagging index {index} as done in database...");
-      await Database.ExecuteSql(connection, "INSERT INTO log_entries (index_name, inserted_at) VALUES (@index_name, @inserted_at)", new { index_name = index, inserted_at = DateTime.UtcNow });
-      log.Info($"Finished flagging index {index} as done in database");
+        // Let's log that we're done with that particular index
+        log.Info($"Begin flagging index {index} as done in database...");
+        await Database.ExecuteSql(connection, "INSERT INTO log_entries (index_name, inserted_at) VALUES (@index_name, @inserted_at)", new { index_name = index, inserted_at = DateTime.UtcNow });
+        log.Info($"Finished flagging index {index} as done in database");
+      }
+      catch (Exception ex)
+      {
+        log.Error($"Failed while scraping index {index}. Will continue with rest indexes...", ex);
+      }
     });
 
     var end = DateTime.UtcNow;
     log.Info($"----------- End program at {end}. Total docs scraped = {documentsScrapedTotal}, time ellapsed = {(end - start).TotalSeconds.ToString("F1")} secs --------------\n");
-
   }
 
   private static (string, object) BuildCommand(Elastic.Page page)
@@ -152,7 +169,7 @@ internal class Program
       WHERE NOT EXISTS (
         SELECT *
           FROM documents WITH (UPDLOCK, SERIALIZABLE)
-          WHERE document_id=@document_id{i} AND index_name=@index_name{1}
+          WHERE document_id=@document_id{i} AND index_name=@index_name{i}
       )
      ";
 
