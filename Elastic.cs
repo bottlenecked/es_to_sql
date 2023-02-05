@@ -81,6 +81,8 @@ public class Elastic
     public string IndexName { get; set; }
     public int From { get; set; }
     public int Total { get; set; }
+
+    public string Name { get { return $"{IndexName}:({From}-{Documents.Count - 1})"; } }
     public IList<JObject> Documents { get; set; }
   }
 }

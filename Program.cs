@@ -2,10 +2,18 @@
 using System.Dynamic;
 using System.Text;
 using Newtonsoft.Json.Linq;
+using log4net;
 
 internal class Program
 {
   static IConfigurationRoot config = CreateConfig();
+  static DateTime now = DateTime.UtcNow;
+  private static readonly ILog log = LogManager.GetLogger(typeof(Program));
+
+  static Program()
+  {
+    Log4NetSetup.Setup();
+  }
 
   static object[] matches = new object[]{
     new {event_category = "antivirus", source_zone = "business-Wired"},
@@ -16,10 +24,11 @@ internal class Program
     new {event_category = "ips", event_type = "IDP_ATTACK_LOG_EVENT", source_zone = "crew-Wired", threat_severity = "HIGH"},
   };
 
-  static DateTime now = DateTime.UtcNow;
 
   private static async Task Main(string[] args)
   {
+    var start = now;
+    log.Info($"-------------------------------- Start program at {start} --------------------------------");
     var elasticClient = Elastic.CreateElasticSearchClient(config);
     var connection = Database.CreateSqlConnection(config);
 
@@ -40,47 +49,68 @@ internal class Program
       }
     }
 
-
     // Get all the indexes available in ElasticSearch
+    log.Info("Getting all available indexes from Elastic...");
     var indexes = await Elastic.ListIndexesOrdered(elasticClient);
+    log.Info($"Finished getting all available indexes. Indexes found = [{string.Join(", ", indexes)}], count={indexes.Count()}");
 
     // Calculate the last index to scan. Indexes are named like junoslogs-2023.01.01-13
     // ie they have a date+hour timestamp in their name. The last index will be the time_now_utc - 2h
     // index just to make sure there are no issues with clock skew between the servers
-    var lastIndexTime = now.AddHours(-2);
-    var lastIndex = $"junoslogs-{lastIndexTime.Year}.{lastIndexTime.Month.ToString("D2")}.{lastIndexTime.Day.ToString("D2")}-{lastIndexTime.Hour.ToString("D2")}";
-    Console.WriteLine($"last index= {lastIndex} Now ={now}, LastIndexTime={lastIndexTime}");
+    var maxIndexTime = now.AddHours(-2);
+    var maxIndex = $"junoslogs-{maxIndexTime.Year}.{maxIndexTime.Month.ToString("D2")}.{maxIndexTime.Day.ToString("D2")}-{maxIndexTime.Hour.ToString("D2")}";
+    log.Info($"Based on current time = {now}, the max index to scan will be {maxIndex}");
 
     // Filter out all the indexes that are greater than the last index calculated above
     // because writing may not have finished there
-    var candidateIndexes = indexes.TakeWhile(idx => string.Compare(idx, lastIndex) < 1).ToHashSet();
-    Console.WriteLine($"Indexes to scan = {string.Join(",", candidateIndexes)}, count={candidateIndexes.Count()}");
+    var candidateIndexes = indexes.TakeWhile(idx => string.Compare(idx, maxIndex) < 1).ToHashSet();
+    log.Info($"Candidate indexes to scan: count={candidateIndexes.Count}, which=[{string.Join(",", candidateIndexes)}]");
 
     // Now scan the database for the indexes completed. For every match we're going to skip that index
     // because it would have been scanned in a previous run
+
+    log.Info("Begin querying database for previously completed indexes scraped based on available indexes in Elastic...");
 
     var previouslyCompletedIndexes = (await Database.ExecuteSql(connection, "SELECT index_name FROM log_entries WHERE index_name IN (@indexes)", new { indexes = candidateIndexes }))
       .SelectMany(x => x.Values)
       .Cast<string>()
       .ToList();
-    Console.WriteLine("Indexes completed=" + string.Join(", ", previouslyCompletedIndexes));
+    log.Info($"Finished querying database. Matched indexes previously completed: count={previouslyCompletedIndexes}, which=[{string.Join(", ", previouslyCompletedIndexes)}]");
 
     // Skip the indexes that have already been completed
     var indexesToScan = candidateIndexes.Except(previouslyCompletedIndexes).ToList();
+    log.Info($"Remaining indexes to scrape now: count={indexesToScan.Count}, which=[{string.Join(", ", indexesToScan)}]");
 
     // Time to fetch the documents from Elastic
+    var documentsScrapedTotal = 0;
+    log.Info("Begin scraping Elastic indexes...");
     var q = Elastic.GenerateJunosQuery(matches);
     await Parallel.ForEachAsync(indexesToScan, async (index, _ct) =>
     {
-      Console.WriteLine($"Scraping index {index}....");
+      var documentsScrapedFromIndex = 0;
+      log.Info($"Beging scraping index {index}....");
       await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, q))
       {
+        log.Info($"Fetched document batch {page.Name}");
+        // Now write the entire page of documents (1000) in one go to avoid
+        // being too chatty
+        log.Info($"Begin inserting document batch {page.Name}...");
         (var cmd, var cmdparams) = BuildCommand(page);
         await Database.ExecuteSql(connection, cmd, cmdparams);
+        log.Info($"Finished inserting document batch {page.Name}...");
+        Interlocked.Add(ref documentsScrapedTotal, page.Documents.Count);
+        Interlocked.Add(ref documentsScrapedFromIndex, page.Documents.Count);
       }
+      log.Info($"Finished scraping index {index} from Elastic. Documents scraped={documentsScrapedFromIndex}");
+
       // Let's log that we're done with that particular index
+      log.Info($"Begin flagging index {index} as done in database...");
       await Database.ExecuteSql(connection, "INSERT INTO log_entries (index_name, inserted_at) VALUES (@index_name, @inserted_at)", new { index_name = index, inserted_at = DateTime.UtcNow });
+      log.Info($"Finished flagging index {index} as done in database");
     });
+
+    var end = DateTime.UtcNow;
+    log.Info($"----------- End program at {end}. Total docs scraped = {documentsScrapedTotal}, time ellapsed = {(end - start).TotalSeconds.ToString("F1")} secs --------------\n");
 
   }
 
