@@ -1,1 +1,0 @@
-- `mssql-cli -S localhost -d tempdb -U sa -P P@ssword -C`

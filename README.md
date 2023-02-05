@@ -33,3 +33,6 @@ To connect to the dockerized ms sql server use
 ```bash
 mssql-cli -S localhost -d tempdb -U sa -P P@ssword -C
 ```
+
+## Publishing
+Run `./publish.sh` (Mac only) to publish a win-x64 release. The ouput file is placed under `publish/es_to_sql.exe.zip`
