@@ -48,10 +48,12 @@ internal class Program
       switch (args[0])
       {
         case "--populate":
+          EnsureLocal(config);
           var dummyIndexes = await DocumentGenerator.CreateIndexes(elasticClient);
           await DocumentGenerator.PopulateIndexes(elasticClient, dummyIndexes);
           return;
         case "--testrun":
+          EnsureLocal(config);
           await Database.CreateLogTableIfNotExists(connection);
           await Database.CreateDocumentsTableIfNotExists(connection);
           // use a fixed timestamp to make sure we'll scan among the existing local indexes
@@ -189,5 +191,17 @@ internal class Program
         .AddJsonFile("appsettings.json", true)
         .AddEnvironmentVariables()
         .Build();
+  }
+
+  public static void EnsureLocal(IConfiguration config)
+  {
+    if (!config["ES_BASE_URL"].Contains("localhost"))
+    {
+      throw new Exception("ElastiSearch url does not indicate test environment. Aborting!");
+    }
+    if (!config["DATABASE_CONNECTION_STRING"].Contains("localhost"))
+    {
+      throw new Exception("MSSQL Server connection string does not indicate test environment. Aborting!");
+    }
   }
 }
