@@ -88,7 +88,7 @@ internal class Program
       .SelectMany(x => x.Values)
       .Cast<string>()
       .ToList();
-    log.Info($"Finished querying database. Matched indexes previously completed: count={previouslyCompletedIndexes}, which=[{string.Join(", ", previouslyCompletedIndexes)}]");
+    log.Info($"Finished querying database. Matched indexes previously completed: count={previouslyCompletedIndexes.Count}, which=[{string.Join(", ", previouslyCompletedIndexes)}]");
 
     // Skip the indexes that have already been completed
     var indexesToScan = candidateIndexes.Except(previouslyCompletedIndexes).ToList();
@@ -98,13 +98,14 @@ internal class Program
     var documentsScrapedTotal = 0;
     log.Info("Begin scraping Elastic indexes...");
     var q = Elastic.GenerateJunosQuery(matches);
+    int batchSize = int.Parse(config["ES_BATCH_SIZE"]), scrollTimeoutSeconds = int.Parse(config["ES_SCROLL_TIMEOUT_SECONDS"]);
     await Parallel.ForEachAsync(indexesToScan, async (index, _ct) =>
     {
       try
       {
         var documentsScrapedFromIndex = 0;
         log.Info($"Beging scraping index {index}....");
-        await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, int.Parse(config["ES_BATCH_SIZE"]), q))
+        await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, batchSize, scrollTimeoutSeconds, q))
         {
           log.Info($"Fetched document batch {page.Name}");
           if (page.Documents.Count == 0)

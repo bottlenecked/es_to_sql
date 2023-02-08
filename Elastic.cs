@@ -55,13 +55,13 @@ public class Elastic
     return new { @bool = new { must = matches } };
   }
 
-  public static async IAsyncEnumerable<Page> EnumerateAllDocumentsInIndex(HttpClient client, string indexName, int batchSize, object query)
+  public static async IAsyncEnumerable<Page> EnumerateAllDocumentsInIndex(HttpClient client, string indexName, int batchSize, int scrollTimeoutSeconds, object query)
   {
     int from = 0;
     string? scrollId = null;
     while (true)
     {
-      var (url, jsonParams) = PrepareRequest(query, indexName, batchSize, 10, scrollId);
+      var (url, jsonParams) = PrepareRequest(query, indexName, batchSize, scrollTimeoutSeconds, scrollId);
       var request = new StringContent(jsonParams, Encoding.UTF8, "application/json");
       var response = await client.PostAsync(url, request);
       var responseBody = await response.Content.ReadAsStringAsync();
