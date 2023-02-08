@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
@@ -5,10 +6,16 @@ using Newtonsoft.Json.Linq;
 
 public class Elastic
 {
+
   public static HttpClient CreateElasticSearchClient(IConfigurationRoot config)
   {
+    System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+    var handler = new HttpClientHandler()
+    {
+      ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+    };
     var authStr = Convert.ToBase64String(System.Text.ASCIIEncoding.UTF8.GetBytes($"{config["ES_USER_NAME"]}:{config["ES_PASSWORD"]}"));
-    return new HttpClient
+    return new HttpClient(handler)
     {
       BaseAddress = new Uri(config["ES_BASE_URL"]),
       DefaultRequestHeaders = {
