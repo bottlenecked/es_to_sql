@@ -104,9 +104,14 @@ internal class Program
       {
         var documentsScrapedFromIndex = 0;
         log.Info($"Beging scraping index {index}....");
-        await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, q))
+        await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, int.Parse(config["ES_BATCH_SIZE"]), q))
         {
           log.Info($"Fetched document batch {page.Name}");
+          if (page.Documents.Count == 0)
+          {
+            log.Info($"Document batch {page.Name} is empty, index is Done");
+            break;
+          }
           // Now write the entire page of documents (1000) in one go to avoid
           // being too chatty
           log.Info($"Begin inserting document batch {page.Name}...");
