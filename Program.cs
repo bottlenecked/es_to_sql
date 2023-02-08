@@ -98,43 +98,48 @@ internal class Program
     var documentsScrapedTotal = 0;
     log.Info("Begin scraping Elastic indexes...");
     var q = Elastic.GenerateJunosQuery(matches);
-    int batchSize = int.Parse(config["ES_BATCH_SIZE"]), scrollTimeoutSeconds = int.Parse(config["ES_SCROLL_TIMEOUT_SECONDS"]);
-    await Parallel.ForEachAsync(indexesToScan, async (index, _ct) =>
+    int batchSize = int.Parse(config["ES_BATCH_SIZE"]),
+        scrollTimeoutSeconds = int.Parse(config["ES_SCROLL_TIMEOUT_SECONDS"]);
+
+    // limit the number of index scans that are in flight at any time
+    foreach (var indexBatch in indexesToScan.Chunk(Environment.ProcessorCount))
     {
-      try
+      await Parallel.ForEachAsync(indexBatch, async (index, _ct) =>
       {
-        var documentsScrapedFromIndex = 0;
-        log.Info($"Beging scraping index {index}....");
-        await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, batchSize, scrollTimeoutSeconds, q))
+        try
         {
-          log.Info($"Fetched document batch {page.Name}");
-          if (page.Documents.Count == 0)
+          var documentsScrapedFromIndex = 0;
+          log.Info($"Beging scraping index {index}....");
+          await foreach (var page in Elastic.EnumerateAllDocumentsInIndex(elasticClient, index, batchSize, scrollTimeoutSeconds, q))
           {
-            log.Info($"Document batch {page.Name} is empty, index is Done");
-            break;
+            log.Info($"Fetched document batch {page.Name}");
+            if (page.Documents.Count == 0)
+            {
+              log.Info($"Document batch {page.Name} is empty, index is Done");
+              break;
+            }
+            // Now write the entire page of documents (1000) in one go to avoid
+            // being too chatty
+            log.Info($"Begin inserting document batch {page.Name}...");
+            (var cmd, var cmdparams) = BuildCommand(page);
+            await Database.ExecuteSql(connection, cmd, cmdparams);
+            log.Info($"Finished inserting document batch {page.Name}...");
+            Interlocked.Add(ref documentsScrapedTotal, page.Documents.Count);
+            Interlocked.Add(ref documentsScrapedFromIndex, page.Documents.Count);
           }
-          // Now write the entire page of documents (1000) in one go to avoid
-          // being too chatty
-          log.Info($"Begin inserting document batch {page.Name}...");
-          (var cmd, var cmdparams) = BuildCommand(page);
-          await Database.ExecuteSql(connection, cmd, cmdparams);
-          log.Info($"Finished inserting document batch {page.Name}...");
-          Interlocked.Add(ref documentsScrapedTotal, page.Documents.Count);
-          Interlocked.Add(ref documentsScrapedFromIndex, page.Documents.Count);
+          log.Info($"Finished scraping index {index} from Elastic. Documents scraped={documentsScrapedFromIndex}");
+
+          // Let's log that we're done with that particular index
+          log.Info($"Begin flagging index {index} as done in database...");
+          await Database.ExecuteSql(connection, "INSERT INTO log_entries (index_name, inserted_at) VALUES (@index_name, @inserted_at)", new { index_name = index, inserted_at = DateTime.UtcNow });
+          log.Info($"Finished flagging index {index} as done in database");
         }
-        log.Info($"Finished scraping index {index} from Elastic. Documents scraped={documentsScrapedFromIndex}");
-
-        // Let's log that we're done with that particular index
-        log.Info($"Begin flagging index {index} as done in database...");
-        await Database.ExecuteSql(connection, "INSERT INTO log_entries (index_name, inserted_at) VALUES (@index_name, @inserted_at)", new { index_name = index, inserted_at = DateTime.UtcNow });
-        log.Info($"Finished flagging index {index} as done in database");
-      }
-      catch (Exception ex)
-      {
-        log.Error($"Failed while scraping index {index}. Will continue with rest indexes...", ex);
-      }
-    });
-
+        catch (Exception ex)
+        {
+          log.Error($"Failed while scraping index {index}. Will continue with rest indexes...", ex);
+        }
+      });
+    }
     var end = DateTime.UtcNow;
     log.Info($"----------- End program at {end}. Total docs scraped = {documentsScrapedTotal}, time ellapsed = {(end - start).TotalSeconds.ToString("F1")} secs --------------\n");
   }
