@@ -15,6 +15,7 @@ internal class Program
     Log4NetSetup.Setup();
   }
 
+  // Each field field specified in a match will be ANDed. Matches (rows of new {...} in the code below) will be ORed
   static object[] matches = new object[]{
     new {event_category = "antivirus", source_zone = "business-Wired"},
     new {event_category = "apptrack", application = "BITTORRENT", event_type = "APPTRACK_SESSION_CLOSE", reason = "Closed by junos-dynapp"},
@@ -69,7 +70,8 @@ internal class Program
 
     // Calculate the last index to scan. Indexes are named like junoslogs-2023.01.01-13
     // ie they have a date+hour timestamp in their name. The last index will be the time_now_utc - 2h
-    // index just to make sure there are no issues with clock skew between the servers
+    // index just to make sure there are no issues with clock skew between the servers and also
+    // to make sure that we're reading from indexes that aren't still being written to.
     var maxIndexTime = now.AddHours(-2);
     var maxIndex = $"junoslogs-{maxIndexTime.Year}.{maxIndexTime.Month.ToString("D2")}.{maxIndexTime.Day.ToString("D2")}-{maxIndexTime.Hour.ToString("D2")}";
     log.Info($"Based on current time = {now}, the max index to scan will be {maxIndex}");
@@ -81,7 +83,6 @@ internal class Program
 
     // Now scan the database for the indexes completed. For every match we're going to skip that index
     // because it would have been scanned in a previous run
-
     log.Info("Begin querying database for previously completed indexes scraped based on available indexes in Elastic...");
 
     var previouslyCompletedIndexes = (await Database.ExecuteSql(connection, "SELECT index_name FROM log_entries WHERE index_name IN (@indexes)", new { indexes = candidateIndexes }))
@@ -101,7 +102,7 @@ internal class Program
     int batchSize = int.Parse(config["ES_BATCH_SIZE"]),
         scrollTimeoutSeconds = int.Parse(config["ES_SCROLL_TIMEOUT_SECONDS"]);
 
-    // limit the number of index scans that are in flight at any time
+    // limit the number of index scans that are in flight at any time. It ends up being both faster and more reliable this way...
     foreach (var indexBatch in indexesToScan.Chunk(Environment.ProcessorCount))
     {
       await Parallel.ForEachAsync(indexBatch, async (index, _ct) =>
@@ -118,8 +119,10 @@ internal class Program
               log.Info($"Document batch {page.Name} is empty, index is Done");
               break;
             }
-            // Now write the entire page of documents (1000) in one go to avoid
+            // Now write the entire page of documents (130) in one go to avoid
             // being too chatty
+            // The batch size of 130 is chosen to avoid hitting the MSSQL
+            // 'max params in a prepared statement' limit (=2100)
             log.Info($"Begin inserting document batch {page.Name}...");
             (var cmd, var cmdparams) = BuildCommand(page);
             await Database.ExecuteSql(connection, cmd, cmdparams);
